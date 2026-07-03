@@ -1,0 +1,14 @@
+# Vercel Python runtime: единый ASGI-entrypoint + рантайм-зависимости.
+# Локальная разработка/тесты используют requirements.txt (там ещё pytest, dotenv).
+[project]
+name = "tg-bot-lab"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.13,<4",
+    "aiohttp>=3.9",
+    "upstash-redis>=1.1",
+]
+
+[tool.vercel]
+entrypoint = "api.index:app"
