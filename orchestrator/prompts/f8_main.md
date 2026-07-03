@@ -1,12 +1,16 @@
-import asyncio
-import importlib
-import logging
-import aiohttp
-from aiogram import Bot, Dispatcher
-from dotenv import load_dotenv
-from bot import config, oauth_server
-from bot.handlers import router
-from bot.storage import TokenStore
+Write `bot/main.py`: bootstrap for an aiogram 3.x bot plus the OAuth callback
+server. Type hints.
+
+Imports:
+    import asyncio
+    import importlib
+    import logging
+    import aiohttp
+    from aiogram import Bot, Dispatcher
+    from dotenv import load_dotenv
+    from bot import config, oauth_server
+    from bot.handlers import router
+    from bot.storage import TokenStore
 
 async def main() -> None:
     load_dotenv()

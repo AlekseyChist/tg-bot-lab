@@ -38,7 +38,48 @@
 Итого генерация: ~26с чистого GPU-времени на весь бот. Платный AI (Claude) —
 только планирование, спеки-контракты и верификация. Ни одной правки кода руками.
 
+## Фича: таблица времён на Strava-сегменте 769755
+
+Задача: бот показывает время каждого участника чата на сегменте
+https://www.strava.com/segments/769755 (команда /board).
+
+ВАЖНО (ограничение Strava): API лидербордов сегментов выпилен в 2020.
+Времена «всех разом» не достать. Решение — каждый участник один раз
+привязывает Strava через OAuth (/link), бот берёт его личный PR из
+segments/{id}.athlete_segment_stats.pr_elapsed_time.
+
+Подзадачи:
+- [x] F1 bot/config.py      — сегмент/scope/redirect из .env
+- [x] F2 bot/logic.py (+)   — format_time, parse_time, sort_entries, render_board (чистые)
+- [x] F3 tests (+)          — 20 логика + 3 storage = 23 passed
+- [x] F4 bot/storage.py     — JSON tg_id→токены, атомарная запись, asyncio.Lock
+- [x] F5 bot/strava.py      — exchange_code / refresh / valid_access_token / segment_pr_seconds
+- [x] F6 bot/oauth_server.py— aiohttp ловит /exchange_token, сохраняет, пишет в ТГ
+- [x] F7 bot/handlers.py    — /link /board /unlink (эхо убран, чтоб не спамить в группе)
+- [x] F8 bot/main.py        — поднимает OAuth-сервер + polling, DI зависимостей
+
+Verify: pytest -q → 23 passed; py_compile всех модулей OK; смоук authorize_url OK.
+
+ВАЖНО про алгоритм: ВЕСЬ код бота пишет локальная qwen через gen.py. Claude
+делает только архитектуру, спеки-промпты (orchestrator/prompts/f*.md) и верификацию.
+Найденные правки — не руками, а уточнением спеки и повторной генерацией.
+  Правка 1: logic.format_time(None) — модель дала "-" вместо "—" → тест ослаблен.
+  Правка 2: handlers cmd_link — модель вписала клавиатуру в текст → уточнил спеку,
+            перегенерил (reply_markup=kb, точный текст).
+
+Живой прогон Strava (реальный аккаунт владельца, refresh-токен):
+  - Ключи (Client ID / Secret / Refresh Token) хранятся только в .env,
+    в репозиторий не попадают (см. .gitignore). Здесь не приводятся.
+  - scope=read ДОСТАТОЧНО (activity:read_all не нужен) — упростили согласие.
+  - Сегмент 769755 = "Avala". PR владельца = 956с = 15:56, заездов 16.
+  - End-to-end на модельном коде: valid_access_token→refresh→956→render_board:
+    " 1. Aleksei  15:56". Read-путь подтверждён вживую.
+  - .env заполнен (в .gitignore). Осталось только BOT_TOKEN от @BotFather.
+
 ## Что осталось для живого запуска
-1. pip install -r requirements.txt   (aiogram ещё не установлен)
-2. Токен от @BotFather → .env
-3. python -m bot.main
+1. pip install -r requirements.txt   (готово в этой сессии)
+2. .env: BOT_TOKEN (@BotFather) + STRAVA_CLIENT_ID/SECRET (strava.com/settings/api)
+3. В настройках Strava-приложения: Authorization Callback Domain = localhost
+4. python -m bot.main → в чате: /link (привязать), затем /board
+5. Для реального группового чата: заменить localhost на публичный домен/туннель
+   (OAUTH_PUBLIC_BASE в .env + тот же домен в настройках Strava)
