@@ -1,0 +1,6 @@
+{
+  "functions": {
+    "api/telegram.py": { "maxDuration": 30 },
+    "api/exchange_token.py": { "maxDuration": 30 }
+  }
+}

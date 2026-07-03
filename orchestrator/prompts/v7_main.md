@@ -1,16 +1,17 @@
-import asyncio
-import importlib
-import logging
+Напиши целиком файл `bot/main.py` — ЛОКАЛЬНЫЙ запуск бота в polling-режиме
+(для разработки на своей машине; на Vercel этот файл не используется).
+Обновление: `pending` теперь `PendingStore` из bot.storage (а не пустой dict),
+и перед polling нужно снять вебхук, чтобы не конфликтовал с getUpdates.
 
-import aiohttp
-from aiogram import Bot, Dispatcher
-from dotenv import load_dotenv
+ОБЯЗАТЕЛЬНО: файл ДОЛЖЕН начинаться с блока импортов (все строки ниже), и только
+ПОТОМ идёт `async def main()`. Не пропускай импорты.
 
-from bot import config, oauth_server
-from bot.handlers import router
-from bot.storage import TokenStore, PendingStore
+Импорты: `import asyncio, importlib, logging`, `import aiohttp`,
+`from aiogram import Bot, Dispatcher`, `from dotenv import load_dotenv`,
+`from bot import config, oauth_server`, `from bot.handlers import router`,
+`from bot.storage import TokenStore, PendingStore`.
 
-
+```
 async def main() -> None:
     load_dotenv()
     importlib.reload(config)   # config читает env при импорте, до load_dotenv
@@ -38,3 +39,6 @@ async def main() -> None:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     asyncio.run(main())
+```
+
+Выведи ТОЛЬКО код файла целиком в одном ```python блоке.
