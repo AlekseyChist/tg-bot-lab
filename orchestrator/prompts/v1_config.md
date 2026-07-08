@@ -27,8 +27,14 @@ def _int(name: str, default: int) -> int:
 - `OAUTH_PUBLIC_BASE = os.environ.get("OAUTH_PUBLIC_BASE", f"http://{OAUTH_HOST}:{OAUTH_PORT}")`
 - `REDIRECT_PATH = "/api/exchange_token"`  — ВАЖНО: именно этот путь (Vercel-функция).
 - `TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")`
-- `UPSTASH_REDIS_REST_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "")`
-- `UPSTASH_REDIS_REST_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")`
+- `UPSTASH_REDIS_REST_URL` — читается из `UPSTASH_REDIS_REST_URL`, а если пусто — из `KV_REST_API_URL` (так называет ту же переменную интеграция Upstash в Vercel), иначе `""`:
+  ```
+  UPSTASH_REDIS_REST_URL = os.environ.get("UPSTASH_REDIS_REST_URL") or os.environ.get("KV_REST_API_URL", "")
+  ```
+- `UPSTASH_REDIS_REST_TOKEN` — аналогично, с фолбэком на `KV_REST_API_TOKEN`:
+  ```
+  UPSTASH_REDIS_REST_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN") or os.environ.get("KV_REST_API_TOKEN", "")
+  ```
 
 Функции:
 ```
