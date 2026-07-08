@@ -34,16 +34,34 @@
    `await message.answer(logic.help_text())`
 
 3) `@router.message(Command("link"))` `cmd_link(message: Message, pending: PendingStore)`:
+   ЦЕЛЬ ИЗМЕНЕНИЯ: в группе каждый должен получать СВОЮ ссылку в ЛИЧКУ, чтобы люди
+   не тыкали в чужую кнопку. В личном чате — поведение как раньше.
    - если не `config.STRAVA_CLIENT_ID` → `await message.answer("Приложение Strava не настроено.")`, return.
    - `state = secrets.token_urlsafe(16)`
-   - собери словарь `pend = {"tg_id": message.from_user.id, "name": _display_name(message), "chat_id": message.chat.id}`
+   - `name = _display_name(message)`
    - `url = strava.authorize_url(state)`
    - `kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔗 Привязать Strava", url=url)]])`
-   - `try: await message.delete() except Exception: pass`
-   - `prompt = await message.answer(f"Нажми кнопку и разреши доступ. Возьмём только твой результат на сегменте {config.SEGMENT_ID}.", reply_markup=kb)`
-   - `pend["prompt_message_id"] = prompt.message_id`
-   - ВАЖНО (изменение): сохранить через store: `await pending.set(state, pend, ttl=600)`
-   - `asyncio.create_task(_autodelete(prompt, 120))`
+   - `text = f"Нажми кнопку и разреши доступ. Возьмём только твой результат на сегменте {config.SEGMENT_ID}."`
+   - `pend = {"tg_id": message.from_user.id, "name": name}`
+   - Если чат приватный (`message.chat.type == "private"`):
+       - `prompt = await message.answer(text, reply_markup=kb)`
+       - `pend["chat_id"] = message.chat.id`
+   - Иначе (группа/супергруппа) — отправляем кнопку в ЛС пользователю:
+       - в `try` попытаться: `prompt = await message.bot.send_message(message.from_user.id, text, reply_markup=kb)`
+       - `except Exception:` (бот не может писать в ЛС — юзер не нажимал Start):
+           - `me = await message.bot.me()`
+           - `start_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🤖 Открыть бота", url=f"https://t.me/{me.username}?start=link")]])`
+           - `warn = await message.answer(f"{name}, чтобы привязать Strava — открой меня в личке (кнопка ниже), нажми Start и отправь /link там.", reply_markup=start_kb)`
+           - `asyncio.create_task(_autodelete(warn, 30))`
+           - `try: await message.delete() except Exception: pass`
+           - `return`
+       - `pend["chat_id"] = message.from_user.id`  (чат для колбэка — личка)
+       - удалить исходную команду в группе: `try: await message.delete() except Exception: pass`
+       - краткое уведомление в группе: `note = await message.answer(f"📩 {name}, отправил тебе ссылку в личку.")` и `asyncio.create_task(_autodelete(note, 8))`
+   - Общий хвост (для обоих веток, где `prompt` создан):
+       - `pend["prompt_message_id"] = prompt.message_id`
+       - `await pending.set(state, pend, ttl=600)`
+       - `asyncio.create_task(_autodelete(prompt, 120))`
 
 4) `@router.message(Command("unlink"))` `cmd_unlink(message, store: TokenStore)`:
    `removed = await store.delete(message.from_user.id)`;
