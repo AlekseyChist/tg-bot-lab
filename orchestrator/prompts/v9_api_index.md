@@ -52,12 +52,24 @@ def _header(scope, name: str) -> str:
 ```
 Заголовки в ASGI-scope — список пар (bytes, bytes), имена в нижнем регистре.
 
+--- Диспетчер (СОЗДАЁТСЯ ОДИН РАЗ на уровне модуля) ---
+КРИТИЧНО: на Vercel один и тот же процесс обслуживает много запросов подряд
+(тёплый старт). `router` — глобальный объект и может быть привязан к диспетчеру
+только один раз. Поэтому НЕЛЬЗЯ создавать `Dispatcher()` и звать
+`dp.include_router(router)` внутри `_process_update` — на втором апдейте это даст
+`RuntimeError: Router is already attached`. Создай диспетчер РОВНО ОДИН РАЗ на
+уровне модуля (после вспомогательных функций) и переиспользуй его:
+```
+dp = Dispatcher()
+dp.include_router(router)
+```
+
 --- Обработка апдейта Telegram ---
+Переиспользует глобальный `dp` (НЕ создаёт новый Dispatcher и НЕ включает router
+повторно). `Bot`, хранилище и http-сессия — свои на каждый запрос:
 ```
 async def _process_update(data: dict) -> None:
     bot = Bot(config.BOT_TOKEN)
-    dp = Dispatcher()
-    dp.include_router(router)
     store = TokenStore()
     pending = PendingStore()
     http = aiohttp.ClientSession()
@@ -125,4 +137,4 @@ async def app(scope, receive, send) -> None:
 ```
 
 Выведи ТОЛЬКО код файла целиком в одном ```python блоке. Не добавляй других имён
-верхнего уровня, кроме перечисленных функций и `app`.
+верхнего уровня, кроме перечисленных функций, `app` и модульного `dp`.

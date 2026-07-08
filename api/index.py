@@ -42,10 +42,12 @@ def _header(scope, name: str) -> str:
     return ""
 
 
+dp = Dispatcher()
+dp.include_router(router)
+
+
 async def _process_update(data: dict) -> None:
     bot = Bot(config.BOT_TOKEN)
-    dp = Dispatcher()
-    dp.include_router(router)
     store = TokenStore()
     pending = PendingStore()
     http = aiohttp.ClientSession()
