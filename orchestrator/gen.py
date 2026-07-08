@@ -47,7 +47,8 @@ def extract_code(text: str) -> str | None:
 
 
 def call_ollama(model: str, system: str, task: str, num_predict: int,
-                temperature: float, keep_alive: str, timeout: int) -> dict:
+                temperature: float, keep_alive: str, timeout: int,
+                think: bool = False) -> dict:
     payload = {
         "model": model,
         "messages": [
@@ -56,6 +57,9 @@ def call_ollama(model: str, system: str, task: str, num_predict: int,
         ],
         "stream": False,
         "keep_alive": keep_alive,
+        # think=False отключает «рассуждения» у thinking-моделей (Qwen3 и т.п.):
+        # модель сразу выдаёт код, а не 100500 строк размышлений. Ollama >=0.9.
+        "think": think,
         "options": {"temperature": temperature, "num_predict": num_predict},
     }
     req = urllib.request.Request(
@@ -81,6 +85,9 @@ def main() -> int:
     ap.add_argument("--temperature", type=float, default=0.1)
     ap.add_argument("--keep-alive", default="15m", help="Keep model warm in VRAM.")
     ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--think", action="store_true",
+                    help="Включить внутренние 'рассуждения' модели (по умолчанию ВЫКЛ — "
+                         "thinking-модели сразу выдают код, без длинных размышлений).")
     ap.add_argument("--raw", action="store_true", help="Print raw model reply too.")
     args = ap.parse_args()
 
@@ -109,6 +116,7 @@ def main() -> int:
         data = call_ollama(
             args.model, system, task, args.num_predict,
             args.temperature, args.keep_alive, args.timeout,
+            think=args.think,
         )
     except Exception as e:  # noqa: BLE001 - CLI boundary
         print(f"[gen] ОШИБКА вызова Ollama: {e}", file=sys.stderr)
