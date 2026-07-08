@@ -7,3 +7,5 @@ bot/data/
 .idea/
 .vercel/
 .vercel
+.aider*
+.env*
