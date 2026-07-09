@@ -59,12 +59,16 @@ async def cmd_link(message: Message, pending: dict) -> None:
 
 @router.message(Command("unlink"))
 async def cmd_unlink(message: Message, store: TokenStore, http: aiohttp.ClientSession) -> None:
-    Honest unlink: revoke the token on Strava's side FIRST, then forget it locally.
+    Honest unlink: revoke the authorization on Strava's side FIRST, then forget
+    it locally. Strava's deauthorize needs a VALID access token, so refresh via
+    valid_access_token() before revoking.
     - tg_id = message.from_user.id
     - record = await store.get(tg_id)
-    - if record: await strava.revoke_token(http, record.get("refresh_token"))
-      (ignore the returned bool — Strava returns 200 even for an already-dead token;
-      we delete locally regardless)
+    - if record:
+        token = await strava.valid_access_token(http, store, tg_id, record)
+        if token:
+            await strava.revoke_token(http, token)
+      (we still delete locally regardless of the revoke result)
     - removed = await store.delete(tg_id)
     - answer "Strava отвязана." if removed else "У тебя нет привязки."
 
@@ -80,8 +84,11 @@ async def cmd_revoke_all(message: Message, store: TokenStore, http: aiohttp.Clie
     - if not users: await message.answer("Никто не привязан — нечего отзывать."); return
     - count = 0
     - for tg_id_str, record in list(users.items()):
-        await strava.revoke_token(http, record.get("refresh_token"))
-        await store.delete(int(tg_id_str))
+        tg_id = int(tg_id_str)
+        token = await strava.valid_access_token(http, store, tg_id, record)
+        if token:
+            await strava.revoke_token(http, token)
+        await store.delete(tg_id)
         count += 1
     - await message.answer(f"Отозвано и удалено привязок: {count}.")
 

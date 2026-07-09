@@ -78,7 +78,9 @@ async def cmd_unlink(message: Message, store: TokenStore, http: aiohttp.ClientSe
     record = await store.get(tg_id)
 
     if record:
-        await strava.revoke_token(http, record.get("refresh_token"))
+        token = await strava.valid_access_token(http, store, tg_id, record)
+        if token:
+            await strava.revoke_token(http, token)
 
     removed = await store.delete(tg_id)
 
@@ -89,9 +91,7 @@ async def cmd_unlink(message: Message, store: TokenStore, http: aiohttp.ClientSe
 
 
 @router.message(Command("revoke_all"))
-async def cmd_revoke_all(
-    message: Message, store: TokenStore, http: aiohttp.ClientSession
-) -> None:
+async def cmd_revoke_all(message: Message, store: TokenStore, http: aiohttp.ClientSession) -> None:
     if not config.ADMIN_ID or message.from_user.id != config.ADMIN_ID:
         await message.answer("Команда только для администратора.")
         return
@@ -103,17 +103,18 @@ async def cmd_revoke_all(
 
     count = 0
     for tg_id_str, record in list(users.items()):
-        await strava.revoke_token(http, record.get("refresh_token"))
-        await store.delete(int(tg_id_str))
+        tg_id = int(tg_id_str)
+        token = await strava.valid_access_token(http, store, tg_id, record)
+        if token:
+            await strava.revoke_token(http, token)
+        await store.delete(tg_id)
         count += 1
 
     await message.answer(f"Отозвано и удалено привязок: {count}.")
 
 
 @router.message(Command("board"))
-async def cmd_board(
-    message: Message, store: TokenStore, http: aiohttp.ClientSession
-) -> None:
+async def cmd_board(message: Message, store: TokenStore, http: aiohttp.ClientSession) -> None:
     users = await store.all()
     if not users:
         await message.answer(logic.render_board([], config.SEGMENT_ID))
@@ -125,22 +126,16 @@ async def cmd_board(
         token = await strava.valid_access_token(http, store, int(tg_id_str), record)
         seconds = None
         if token:
-            seconds = await strava.segment_pr_seconds(
-                http, token, config.SEGMENT_ID
-            )
+            seconds = await strava.segment_pr_seconds(http, token, config.SEGMENT_ID)
         return {"name": record.get("name", "?"), "seconds": seconds}
 
     entries = await asyncio.gather(*(one(k, v) for k, v in users.items()))
     board = logic.render_board(list(entries), config.SEGMENT_ID)
-    await placeholder.edit_text(
-        f"<pre>{html.escape(board)}</pre>", parse_mode="HTML"
-    )
+    await placeholder.edit_text(f"<pre>{html.escape(board)}</pre>", parse_mode="HTML")
 
 
 @router.message(Command("badges"))
-async def cmd_badges(
-    message: Message, store: TokenStore, http: aiohttp.ClientSession
-) -> None:
+async def cmd_badges(message: Message, store: TokenStore, http: aiohttp.ClientSession) -> None:
     if message.chat.type != "supergroup":
         await message.answer(
             "Работает только в супергруппе. Сделай бота админом с правом «Назначать администраторов» — обычная группа станет супергруппой сама."
