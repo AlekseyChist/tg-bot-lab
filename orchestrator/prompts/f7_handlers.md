@@ -58,9 +58,32 @@ async def cmd_link(message: Message, pending: dict) -> None:
     already created above with tg_id/name/chat_id; here we just add prompt_message_id.
 
 @router.message(Command("unlink"))
-async def cmd_unlink(message: Message, store: TokenStore) -> None:
-    removed = await store.delete(message.from_user.id)
-    answer "Strava отвязана." if removed else "У тебя нет привязки."
+async def cmd_unlink(message: Message, store: TokenStore, http: aiohttp.ClientSession) -> None:
+    Honest unlink: revoke the token on Strava's side FIRST, then forget it locally.
+    - tg_id = message.from_user.id
+    - record = await store.get(tg_id)
+    - if record: await strava.revoke_token(http, record.get("refresh_token"))
+      (ignore the returned bool — Strava returns 200 even for an already-dead token;
+      we delete locally regardless)
+    - removed = await store.delete(tg_id)
+    - answer "Strava отвязана." if removed else "У тебя нет привязки."
+
+@router.message(Command("revoke_all"))
+async def cmd_revoke_all(message: Message, store: TokenStore, http: aiohttp.ClientSession) -> None:
+    Admin-only: revoke EVERY linked athlete's Strava authorization and clear the
+    store. Use for a leaked client_secret or a forced re-link after a scope change.
+    - # доступ только у владельца; config.ADMIN_ID == 0 значит «не задан» -> отказать всем:
+      if not config.ADMIN_ID or message.from_user.id != config.ADMIN_ID:
+          await message.answer("Команда только для администратора.")
+          return
+    - users = await store.all()
+    - if not users: await message.answer("Никто не привязан — нечего отзывать."); return
+    - count = 0
+    - for tg_id_str, record in list(users.items()):
+        await strava.revoke_token(http, record.get("refresh_token"))
+        await store.delete(int(tg_id_str))
+        count += 1
+    - await message.answer(f"Отозвано и удалено привязок: {count}.")
 
 @router.message(Command("board"))
 async def cmd_board(message: Message, store: TokenStore, http: aiohttp.ClientSession) -> None:

@@ -7,7 +7,7 @@ from aiogram import Router, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from bot import config, logic, strava
-from bot.storage import TokenStore, PendingStore
+from bot.storage import TokenStore
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -22,9 +22,11 @@ async def _autodelete(msg: Message, delay: int = 5) -> None:
 
 
 def _display_name(msg: Message) -> str:
-    if msg.from_user.username:
-        return f"@{msg.from_user.username}"
-    return msg.from_user.full_name
+    u = msg.from_user
+    if u.username:
+        return "@" + u.username
+    else:
+        return u.full_name
 
 
 @router.message(CommandStart())
@@ -38,56 +40,80 @@ async def cmd_help(message: Message) -> None:
 
 
 @router.message(Command("link"))
-async def cmd_link(message: Message, pending: PendingStore) -> None:
+async def cmd_link(message: Message, pending: dict) -> None:
     if not config.STRAVA_CLIENT_ID:
-        await message.answer("Приложение Strava не настроено.")
+        await message.answer("Strava app is not configured")
         return
 
     state = secrets.token_urlsafe(16)
-    name = _display_name(message)
+    pending[state] = {
+        "tg_id": message.from_user.id,
+        "name": _display_name(message),
+        "chat_id": message.chat.id,
+    }
     url = strava.authorize_url(state)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔗 Привязать Strava", url=url)]])
-    text = f"Нажми кнопку и разреши доступ. Возьмём только твой результат на сегменте {config.SEGMENT_ID}."
-    pend = {"tg_id": message.from_user.id, "name": name}
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 Привязать Strava", url=url)]
+        ]
+    )
 
-    if message.chat.type == "private":
-        prompt = await message.answer(text, reply_markup=kb)
-        pend["chat_id"] = message.chat.id
-    else:
-        try:
-            prompt = await message.bot.send_message(message.from_user.id, text, reply_markup=kb)
-        except Exception:
-            me = await message.bot.me()
-            start_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🤖 Открыть бота", url=f"https://t.me/{me.username}?start=link")]])
-            warn = await message.answer(f"{name}, чтобы привязать Strava — открой меня в личке (кнопка ниже), нажми Start и отправь /link там.", reply_markup=start_kb)
-            asyncio.create_task(_autodelete(warn, 30))
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            return
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
-        pend["chat_id"] = message.from_user.id
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        note = await message.answer(f"📩 {name}, отправил тебе ссылку в личку.")
-        asyncio.create_task(_autodelete(note, 8))
+    prompt = await message.answer(
+        f"Нажми кнопку и разреши доступ. Возьмём только твой результат на сегменте {config.SEGMENT_ID}.",
+        reply_markup=kb,
+    )
+    pending[state]["prompt_message_id"] = prompt.message_id
 
-    pend["prompt_message_id"] = prompt.message_id
-    await pending.set(state, pend, ttl=600)
     asyncio.create_task(_autodelete(prompt, 120))
 
 
 @router.message(Command("unlink"))
-async def cmd_unlink(message: Message, store: TokenStore) -> None:
-    removed = await store.delete(message.from_user.id)
-    await message.answer("Strava отвязана." if removed else "У тебя нет привязки.")
+async def cmd_unlink(message: Message, store: TokenStore, http: aiohttp.ClientSession) -> None:
+    tg_id = message.from_user.id
+    record = await store.get(tg_id)
+
+    if record:
+        await strava.revoke_token(http, record.get("refresh_token"))
+
+    removed = await store.delete(tg_id)
+
+    if removed:
+        await message.answer("Strava отвязана.")
+    else:
+        await message.answer("У тебя нет привязки.")
+
+
+@router.message(Command("revoke_all"))
+async def cmd_revoke_all(
+    message: Message, store: TokenStore, http: aiohttp.ClientSession
+) -> None:
+    if not config.ADMIN_ID or message.from_user.id != config.ADMIN_ID:
+        await message.answer("Команда только для администратора.")
+        return
+
+    users = await store.all()
+    if not users:
+        await message.answer("Никто не привязан — нечего отзывать.")
+        return
+
+    count = 0
+    for tg_id_str, record in list(users.items()):
+        await strava.revoke_token(http, record.get("refresh_token"))
+        await store.delete(int(tg_id_str))
+        count += 1
+
+    await message.answer(f"Отозвано и удалено привязок: {count}.")
 
 
 @router.message(Command("board"))
-async def cmd_board(message: Message, store: TokenStore, http: aiohttp.ClientSession) -> None:
+async def cmd_board(
+    message: Message, store: TokenStore, http: aiohttp.ClientSession
+) -> None:
     users = await store.all()
     if not users:
         await message.answer(logic.render_board([], config.SEGMENT_ID))
@@ -97,18 +123,28 @@ async def cmd_board(message: Message, store: TokenStore, http: aiohttp.ClientSes
 
     async def one(tg_id_str: str, record: dict) -> dict:
         token = await strava.valid_access_token(http, store, int(tg_id_str), record)
-        seconds = await strava.segment_pr_seconds(http, token, config.SEGMENT_ID) if token else None
+        seconds = None
+        if token:
+            seconds = await strava.segment_pr_seconds(
+                http, token, config.SEGMENT_ID
+            )
         return {"name": record.get("name", "?"), "seconds": seconds}
 
     entries = await asyncio.gather(*(one(k, v) for k, v in users.items()))
     board = logic.render_board(list(entries), config.SEGMENT_ID)
-    await placeholder.edit_text(f"<pre>{html.escape(board)}</pre>", parse_mode="HTML")
+    await placeholder.edit_text(
+        f"<pre>{html.escape(board)}</pre>", parse_mode="HTML"
+    )
 
 
 @router.message(Command("badges"))
-async def cmd_badges(message: Message, store: TokenStore, http: aiohttp.ClientSession) -> None:
+async def cmd_badges(
+    message: Message, store: TokenStore, http: aiohttp.ClientSession
+) -> None:
     if message.chat.type != "supergroup":
-        await message.answer("Работает только в супергруппе. Сделай бота админом с правом «Назначать администраторов» — обычная группа станет супергруппой сама.")
+        await message.answer(
+            "Работает только в супергруппе. Сделай бота админом с правом «Назначать администраторов» — обычная группа станет супергруппой сама."
+        )
         return
 
     users = await store.all()
@@ -124,7 +160,11 @@ async def cmd_badges(message: Message, store: TokenStore, http: aiohttp.ClientSe
         tg_id = int(tg_id_str)
         name = record.get("name", "?")
         token = await strava.valid_access_token(http, store, tg_id, record)
-        seconds = await strava.segment_pr_seconds(http, token, config.SEGMENT_ID) if token else None
+        seconds = (
+            await strava.segment_pr_seconds(http, token, config.SEGMENT_ID)
+            if token
+            else None
+        )
         badge = logic.badge_text(config.SEGMENT_NAME, seconds)
 
         if badge is None:
@@ -133,7 +173,8 @@ async def cmd_badges(message: Message, store: TokenStore, http: aiohttp.ClientSe
 
         try:
             await bot.promote_chat_member(
-                chat_id, tg_id,
+                chat_id,
+                tg_id,
                 is_anonymous=False,
                 can_manage_chat=False,
                 can_change_info=False,
@@ -142,7 +183,7 @@ async def cmd_badges(message: Message, store: TokenStore, http: aiohttp.ClientSe
                 can_restrict_members=False,
                 can_pin_messages=False,
                 can_promote_members=False,
-                can_manage_video_chats=False
+                can_manage_video_chats=False,
             )
             await bot.set_chat_administrator_custom_title(chat_id, tg_id, badge)
             results.append(f"{name}: {badge}")
@@ -160,7 +201,14 @@ async def cmd_badges(message: Message, store: TokenStore, http: aiohttp.ClientSe
     asyncio.create_task(_autodelete(m, 5))
 
 
-@router.message(F.new_chat_members | F.left_chat_member | F.pinned_message | F.new_chat_title | F.new_chat_photo | F.delete_chat_photo)
+@router.message(
+    F.new_chat_members
+    | F.left_chat_member
+    | F.pinned_message
+    | F.new_chat_title
+    | F.new_chat_photo
+    | F.delete_chat_photo
+)
 async def clean_service(message: Message) -> None:
     try:
         await message.delete()
