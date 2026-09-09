@@ -7,7 +7,7 @@ from aiogram import Router, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from bot import config, logic, strava
-from bot.storage import TokenStore
+from bot.storage import TokenStore, PendingStore
 
 router = Router()
 log = logging.getLogger(__name__)
@@ -40,35 +40,66 @@ async def cmd_help(message: Message) -> None:
 
 
 @router.message(Command("link"))
-async def cmd_link(message: Message, pending: dict) -> None:
+async def cmd_link(message: Message, pending: PendingStore) -> None:
     if not config.STRAVA_CLIENT_ID:
-        await message.answer("Strava app is not configured")
+        await message.answer("Приложение Strava не настроено.")
         return
 
     state = secrets.token_urlsafe(16)
-    pending[state] = {
-        "tg_id": message.from_user.id,
-        "name": _display_name(message),
-        "chat_id": message.chat.id,
-    }
+    name = _display_name(message)
     url = strava.authorize_url(state)
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔗 Привязать Strava", url=url)]
         ]
     )
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-    prompt = await message.answer(
-        f"Нажми кнопку и разреши доступ. Возьмём только твой результат на сегменте {config.SEGMENT_ID}.",
-        reply_markup=kb,
+    text = (
+        f"Нажми кнопку и разреши доступ. "
+        f"Возьмём только твой результат на сегменте {config.SEGMENT_ID}."
     )
-    pending[state]["prompt_message_id"] = prompt.message_id
 
+    pend = {"tg_id": message.from_user.id, "name": name}
+
+    if message.chat.type == "private":
+        prompt = await message.answer(text, reply_markup=kb)
+        pend["chat_id"] = message.chat.id
+    else:
+        try:
+            prompt = await message.bot.send_message(
+                message.from_user.id, text, reply_markup=kb
+            )
+        except Exception:
+            me = await message.bot.me()
+            start_kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="🤖 Открыть бота",
+                        url=f"https://t.me/{me.username}?start=link",
+                    )]
+                ]
+            )
+            warn = await message.answer(
+                f"{name}, чтобы привязать Strava — открой меня в личке "
+                f"(кнопка ниже), нажми Start и отправь /link там.",
+                reply_markup=start_kb,
+            )
+            asyncio.create_task(_autodelete(warn, 30))
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+
+        pend["chat_id"] = message.from_user.id
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        note = await message.answer(f"📩 {name}, отправил тебе ссылку в личку.")
+        asyncio.create_task(_autodelete(note, 8))
+
+    pend["prompt_message_id"] = prompt.message_id
+    await pending.set(state, pend, ttl=600)
     asyncio.create_task(_autodelete(prompt, 120))
 
 
