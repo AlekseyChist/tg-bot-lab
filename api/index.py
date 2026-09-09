@@ -4,6 +4,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 import traceback
+import io
+import logging
 from urllib.parse import parse_qs
 import aiohttp
 from aiogram import Bot, Dispatcher
@@ -52,13 +54,24 @@ async def _process_update(data: dict) -> str | None:
     store = TokenStore()
     pending = PendingStore()
     http = aiohttp.ClientSession()
+
+    log_stream = io.StringIO()
+    handler = logging.StreamHandler(log_stream)
+    handler.setLevel(logging.WARNING)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+    root_logger.setLevel(logging.DEBUG)
+
     try:
         update = Update.model_validate(data)
         await dp.feed_update(bot, update, store=store, http=http, pending=pending)
-        return None
+        captured = log_stream.getvalue()
+        return captured if captured else None
     except Exception:
         return traceback.format_exc()
     finally:
+        root_logger.removeHandler(handler)
         await http.close()
         await bot.session.close()
 
