@@ -3,7 +3,19 @@ import json
 import os
 from typing import Dict, Optional
 
+import aiohttp
+
 from bot import config
+
+
+async def _upstash(cmd: list):
+    headers = {"Authorization": f"Bearer {config.UPSTASH_REDIS_REST_TOKEN}"}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            config.UPSTASH_REDIS_REST_URL, json=cmd, headers=headers
+        ) as resp:
+            data = await resp.json()
+            return data.get("result")
 
 
 class TokenStore:
@@ -21,8 +33,14 @@ class TokenStore:
 
     async def set(self, tg_id: int, record: dict) -> None:
         if self._use_redis:
-            r = await self._redis()
-            await r.hset("strava:tokens", str(tg_id), json.dumps(record, ensure_ascii=False))
+            await _upstash(
+                [
+                    "HSET",
+                    "strava:tokens",
+                    str(tg_id),
+                    json.dumps(record, ensure_ascii=False),
+                ]
+            )
         else:
             async with self._lock:
                 data = self._load()
@@ -31,8 +49,9 @@ class TokenStore:
 
     async def get(self, tg_id: int) -> Optional[dict]:
         if self._use_redis:
-            r = await self._redis()
-            v = await r.hget("strava:tokens", str(tg_id))
+            v = await _upstash(
+                ["HGET", "strava:tokens", str(tg_id)]
+            )
             return json.loads(v) if v else None
         else:
             async with self._lock:
@@ -41,8 +60,9 @@ class TokenStore:
 
     async def delete(self, tg_id: int) -> bool:
         if self._use_redis:
-            r = await self._redis()
-            n = await r.hdel("strava:tokens", str(tg_id))
+            n = await _upstash(
+                ["HDEL", "strava:tokens", str(tg_id)]
+            )
             return bool(n)
         else:
             async with self._lock:
@@ -55,9 +75,12 @@ class TokenStore:
 
     async def all(self) -> Dict[str, dict]:
         if self._use_redis:
-            r = await self._redis()
-            raw = await r.hgetall("strava:tokens")
-            return {k: json.loads(val) for k, val in (raw or {}).items()}
+            raw = await _upstash(["HGETALL", "strava:tokens"])
+            result: Dict[str, dict] = {}
+            if raw:
+                for i in range(0, len(raw), 2):
+                    result[raw[i]] = json.loads(raw[i + 1])
+            return result
         else:
             async with self._lock:
                 return self._load()
@@ -73,12 +96,8 @@ class TokenStore:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         tmp_path = f"{self.path}.tmp"
         with open(tmp_path, "w") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2, separators=(',', ': '))
+            json.dump(data, f, ensure_ascii=False, indent=2, separators=(",", ": "))
         os.replace(tmp_path, self.path)
-
-    async def _redis(self):
-        from upstash_redis.asyncio import Redis
-        return Redis(url=config.UPSTASH_REDIS_REST_URL, token=config.UPSTASH_REDIS_REST_TOKEN)
 
 
 class PendingStore:
@@ -89,19 +108,21 @@ class PendingStore:
 
     async def set(self, state: str, data: dict, ttl: int = 600) -> None:
         if self._use_redis:
-            r = await self._redis()
-            await r.set(f"pending:{state}", json.dumps(data, ensure_ascii=False), ex=ttl)
+            await _upstash(
+                [
+                    "SET",
+                    f"pending:{state}",
+                    json.dumps(data, ensure_ascii=False),
+                    "EX",
+                    str(ttl),
+                ]
+            )
         else:
             self._mem[state] = data
 
     async def pop(self, state: str) -> Optional[dict]:
         if self._use_redis:
-            r = await self._redis()
-            v = await r.getdel(f"pending:{state}")
+            v = await _upstash(["GETDEL", f"pending:{state}"])
             return json.loads(v) if v else None
         else:
             return self._mem.pop(state, None)
-
-    async def _redis(self):
-        from upstash_redis.asyncio import Redis
-        return Redis(url=config.UPSTASH_REDIS_REST_URL, token=config.UPSTASH_REDIS_REST_TOKEN)
