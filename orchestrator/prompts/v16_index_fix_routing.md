@@ -1,0 +1,153 @@
+Найдена корневая причина бага: в `vercel.json` rewrite `/api/(.*) -> /api/index`
+подменяет ASGI `scope["path"]` на `/api/index` ДО того, как наш код успевает
+сравнить путь. Поэтому ветки `if path == "/api/telegram"` и
+`if path == "/api/exchange_token"` НИКОГДА не срабатывали — весь трафик (и
+вебхук Telegram, и OAuth-колбэк Strava) проваливался в заглушку `ok` молча.
+Все временные диагностические правки (io/logging/traceback-марк ery, "showscope",
+"_debug_path") нужно УБРАТЬ — вернуть чистый код, но с ИСПРАВЛЕННОЙ маршрутизацией.
+
+`vercel.json` уже обновлён (сделано отдельно) — теперь rewrite явно передаёт
+маркер маршрута через query-string:
+```json
+{
+  "functions": { "api/index.py": { "maxDuration": 30 } },
+  "rewrites": [
+    { "source": "/api/telegram", "destination": "/api/index?_route=telegram" },
+    { "source": "/api/exchange_token", "destination": "/api/index?_route=exchange_token" },
+    { "source": "/api/(.*)", "destination": "/api/index" }
+  ]
+}
+```
+Vercel мёрджит query-string назначения с query-string исходного запроса — то есть
+для `/api/exchange_token?code=XXX&state=YYY` итоговый `scope["query_string"]`
+внутри функции будет содержать И `_route=exchange_token`, И `code=XXX&state=YYY`.
+
+Перепиши `api/index.py` ЦЕЛИКОМ ЧИСТО (без единого диагностического артефакта):
+маршрутизация теперь идёт по параметру `_route` из query-string, а НЕ по
+`scope["path"]` (`scope["path"]` для ЛЮБОГО `/api/*` запроса теперь всегда будет
+`/api/index` — это ожидаемо и нормально, использовать его для роутинга нельзя).
+
+Импорты (каждый строкой): `import os`, `import sys`,
+`sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))`,
+пустая строка, `import json`, `from urllib.parse import parse_qs`, `import aiohttp`,
+`from aiogram import Bot, Dispatcher`, `from aiogram.types import Update`,
+`from bot import config, oauth_server`, `from bot.handlers import router`,
+`from bot.storage import TokenStore, PendingStore`.
+
+Функции (без изменений по сути, как было ДО диагностики):
+
+```python
+async def _read_body(receive) -> bytes:
+    body = b""
+    more = True
+    while more:
+        msg = await receive()
+        body += msg.get("body", b"")
+        more = msg.get("more_body", False)
+    return body
+
+
+async def _send(send, status: int, content_type: str, body: bytes) -> None:
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [
+            (b"content-type", content_type.encode("utf-8")),
+            (b"content-length", str(len(body)).encode("utf-8")),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
+
+
+def _header(scope, name: str) -> str:
+    target = name.lower().encode("utf-8")
+    for k, v in scope.get("headers", []):
+        if k == target:
+            return v.decode("utf-8")
+    return ""
+
+
+dp = Dispatcher()
+dp.include_router(router)
+
+
+async def _process_update(data: dict) -> None:
+    bot = Bot(config.BOT_TOKEN)
+    store = TokenStore()
+    pending = PendingStore()
+    http = aiohttp.ClientSession()
+    try:
+        update = Update.model_validate(data)
+        await dp.feed_update(bot, update, store=store, http=http, pending=pending)
+    finally:
+        await http.close()
+        await bot.session.close()
+
+
+async def _handle_exchange(query: dict):
+    bot = Bot(config.BOT_TOKEN)
+    store = TokenStore()
+    pending = PendingStore()
+    http = aiohttp.ClientSession()
+    try:
+        return await oauth_server.process_exchange(query, store=store, http=http, pending=pending, bot=bot)
+    finally:
+        await http.close()
+        await bot.session.close()
+```
+
+А вот `app()` — ЕДИНСТВЕННОЕ реальное изменение относительно исходного (до всей
+диагностики): вместо `path = scope.get("path", "")` и сравнений
+`path == "/api/telegram"` / `path == "/api/exchange_token"` используем маркер
+`_route` из query-string. Query-string нужно распарсить ОДИН раз в начале через
+`parse_qs`, достать `_route` (может отсутствовать — тогда это "health" запрос),
+а для `/api/exchange_token` использовать ТЕ ЖЕ распарсенные query-параметры
+(за вычетом служебного `_route`) как раньше — `{k: v[0] for k, v in parsed.items()}`.
+
+```python
+async def app(scope, receive, send) -> None:
+    if scope["type"] != "http":
+        return
+    method = scope.get("method", "GET")
+    raw_qs = scope.get("query_string", b"").decode("utf-8")
+    parsed = parse_qs(raw_qs)
+    route = parsed.get("_route", [""])[0]
+
+    if route == "telegram" and method == "POST":
+        secret = _header(scope, "x-telegram-bot-api-secret-token")
+        if config.TELEGRAM_WEBHOOK_SECRET and secret != config.TELEGRAM_WEBHOOK_SECRET:
+            await _send(send, 403, "text/plain; charset=utf-8", b"forbidden")
+            return
+        raw = await _read_body(receive)
+        try:
+            data = json.loads(raw.decode("utf-8")) if raw else {}
+            await _process_update(data)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        await _send(send, 200, "text/plain; charset=utf-8", b"ok")
+        return
+
+    if route == "exchange_token" and method == "GET":
+        query = {k: v[0] for k, v in parsed.items() if k != "_route"}
+        try:
+            title, body = await _handle_exchange(query)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            title, body = "Ошибка", str(e)
+        page = oauth_server.render_page_html(title, body).encode("utf-8")
+        await _send(send, 200, "text/html; charset=utf-8", page)
+        return
+
+    # health / всё остальное
+    await _send(send, 200, "text/plain; charset=utf-8", b"ok")
+```
+
+Собери всё это в единый файл в том же порядке (импорты → `_read_body` → `_send` →
+`_header` → `dp`/`dp.include_router` → `_process_update` → `_handle_exchange` →
+`app`). Ничего сверх перечисленного не добавляй (никакого `io`, `logging`,
+`traceback.format_exc()`, никаких маркеров вида "DEBUG-V15" или "showscope" —
+это всё было временной диагностикой и должно исчезнуть).
+
+Выведи ТОЛЬКО итоговый код файла целиком в одном ```python блоке.

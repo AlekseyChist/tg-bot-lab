@@ -3,6 +3,8 @@
     "api/index.py": { "maxDuration": 30 }
   },
   "rewrites": [
+    { "source": "/api/telegram", "destination": "/api/index?_route=telegram" },
+    { "source": "/api/exchange_token", "destination": "/api/index?_route=exchange_token" },
     { "source": "/api/(.*)", "destination": "/api/index" }
   ]
 }
