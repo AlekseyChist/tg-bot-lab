@@ -57,7 +57,7 @@ async def _process_update(data: dict) -> str | None:
 
     log_stream = io.StringIO()
     handler = logging.StreamHandler(log_stream)
-    handler.setLevel(logging.WARNING)
+    handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
     root_logger = logging.getLogger()
     root_logger.addHandler(handler)
