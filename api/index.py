@@ -79,6 +79,15 @@ async def app(scope, receive, send) -> None:
     parsed = parse_qs(raw_qs)
     route = parsed.get("_route", [""])[0]
 
+    if route == "_debug_env":
+        info = (
+            f"use_redis={config.use_redis()!r} "
+            f"has_url={bool(config.UPSTASH_REDIS_REST_URL)!r} "
+            f"has_token={bool(config.UPSTASH_REDIS_REST_TOKEN)!r}"
+        )
+        await _send(send, 200, "text/plain; charset=utf-8", info.encode("utf-8"))
+        return
+
     if route == "telegram" and method == "POST":
         secret = _header(scope, "x-telegram-bot-api-secret-token")
         if config.TELEGRAM_WEBHOOK_SECRET and secret != config.TELEGRAM_WEBHOOK_SECRET:
