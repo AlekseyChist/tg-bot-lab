@@ -109,8 +109,7 @@ async def app(scope, receive, send) -> None:
             title, body = await _handle_exchange(query)
         except Exception as e:
             import traceback
-            traceback.print_exc()
-            title, body = "Ошибка", str(e)
+            title, body = "Ошибка", traceback.format_exc()
         page = oauth_server.render_page_html(title, body).encode("utf-8")
         await _send(send, 200, "text/html; charset=utf-8", page)
         return
