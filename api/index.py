@@ -94,6 +94,11 @@ async def app(scope, receive, send) -> None:
     path = scope.get("path", "")
     method = scope.get("method", "GET")
 
+    if path == "/api/_debug_path":
+        info = f"path={path!r} raw_path={scope.get('raw_path')!r} root_path={scope.get('root_path')!r} full_scope={scope!r}"
+        await _send(send, 200, "text/plain; charset=utf-8", info.encode("utf-8"))
+        return
+
     if path == "/api/telegram" and method == "POST":
         secret = _header(scope, "x-telegram-bot-api-secret-token")
         if config.TELEGRAM_WEBHOOK_SECRET and secret != config.TELEGRAM_WEBHOOK_SECRET:
@@ -106,7 +111,7 @@ async def app(scope, receive, send) -> None:
             error_text = await _process_update(data)
         except Exception:
             error_text = traceback.format_exc()
-        marker = f"DEBUG-V15 raw_len={len(raw)}\n"
+        marker = f"DEBUG-V15 raw_len={len(raw)} path={path!r}\n"
         body = (marker + "ERROR/LOG:\n" + (error_text or "(nothing captured)")).encode("utf-8")
         await _send(send, 200, "text/plain; charset=utf-8", body)
         return
