@@ -79,32 +79,6 @@ async def app(scope, receive, send) -> None:
     parsed = parse_qs(raw_qs)
     route = parsed.get("_route", [""])[0]
 
-    if route == "_debug_board":
-        from bot import strava
-        store = TokenStore()
-        http = aiohttp.ClientSession()
-        try:
-            users = await store.all()
-            out = [f"users={list(users.keys())!r}"]
-            for tg_id_str, record in users.items():
-                out.append(f"--- tg_id={tg_id_str} record={record!r}")
-                token = await strava.valid_access_token(http, store, int(tg_id_str), record)
-                out.append(f"token_ok={bool(token)!r}")
-                if token:
-                    url = f"{strava.API_BASE}/segments/{config.SEGMENT_ID}"
-                    headers = {"Authorization": f"Bearer {token}"}
-                    async with http.get(url, headers=headers) as resp:
-                        raw_body = await resp.text()
-                        out.append(f"segment_status={resp.status} body={raw_body[:2000]}")
-            info = "\n".join(out)
-        except Exception:
-            import traceback
-            info = traceback.format_exc()
-        finally:
-            await http.close()
-        await _send(send, 200, "text/plain; charset=utf-8", info.encode("utf-8"))
-        return
-
     if route == "telegram" and method == "POST":
         secret = _header(scope, "x-telegram-bot-api-secret-token")
         if config.TELEGRAM_WEBHOOK_SECRET and secret != config.TELEGRAM_WEBHOOK_SECRET:
