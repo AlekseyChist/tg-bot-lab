@@ -3,6 +3,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
+import traceback
 from urllib.parse import parse_qs
 import aiohttp
 from aiogram import Bot, Dispatcher
@@ -46,7 +47,7 @@ dp = Dispatcher()
 dp.include_router(router)
 
 
-async def _process_update(data: dict) -> None:
+async def _process_update(data: dict) -> str | None:
     bot = Bot(config.BOT_TOKEN)
     store = TokenStore()
     pending = PendingStore()
@@ -54,6 +55,9 @@ async def _process_update(data: dict) -> None:
     try:
         update = Update.model_validate(data)
         await dp.feed_update(bot, update, store=store, http=http, pending=pending)
+        return None
+    except Exception:
+        return traceback.format_exc()
     finally:
         await http.close()
         await bot.session.close()
@@ -83,13 +87,17 @@ async def app(scope, receive, send) -> None:
             await _send(send, 403, "text/plain; charset=utf-8", b"forbidden")
             return
         raw = await _read_body(receive)
+        error_text = None
         try:
             data = json.loads(raw.decode("utf-8")) if raw else {}
-            await _process_update(data)
+            error_text = await _process_update(data)
         except Exception:
-            import traceback
-            traceback.print_exc()
-        await _send(send, 200, "text/plain; charset=utf-8", b"ok")
+            error_text = traceback.format_exc()
+        if error_text:
+            body = ("ERROR:\n" + error_text).encode("utf-8")
+            await _send(send, 200, "text/plain; charset=utf-8", body)
+        else:
+            await _send(send, 200, "text/plain; charset=utf-8", b"ok")
         return
 
     if path == "/api/exchange_token" and method == "GET":
