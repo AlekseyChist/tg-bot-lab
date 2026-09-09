@@ -94,8 +94,9 @@ async def app(scope, receive, send) -> None:
     path = scope.get("path", "")
     method = scope.get("method", "GET")
 
-    if path == "/api/_debug_path":
-        info = f"path={path!r} raw_path={scope.get('raw_path')!r} root_path={scope.get('root_path')!r} full_scope={scope!r}"
+    qs = scope.get("query_string", b"").decode("utf-8")
+    if "showscope" in qs:
+        info = f"path={path!r} method={method!r} qs={qs!r} raw_path={scope.get('raw_path')!r} root_path={scope.get('root_path')!r} keys={list(scope.keys())!r}"
         await _send(send, 200, "text/plain; charset=utf-8", info.encode("utf-8"))
         return
 
