@@ -106,11 +106,9 @@ async def app(scope, receive, send) -> None:
             error_text = await _process_update(data)
         except Exception:
             error_text = traceback.format_exc()
-        if error_text:
-            body = ("ERROR:\n" + error_text).encode("utf-8")
-            await _send(send, 200, "text/plain; charset=utf-8", body)
-        else:
-            await _send(send, 200, "text/plain; charset=utf-8", b"ok")
+        marker = f"DEBUG-V15 raw_len={len(raw)}\n"
+        body = (marker + "ERROR/LOG:\n" + (error_text or "(nothing captured)")).encode("utf-8")
+        await _send(send, 200, "text/plain; charset=utf-8", body)
         return
 
     if path == "/api/exchange_token" and method == "GET":
